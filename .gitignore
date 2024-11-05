@@ -1,5 +1,6 @@
 
 .idea
-.lightning_studio
+.lightning_studio/
 .viminfo
 .vscode/
+.vscode-server/
