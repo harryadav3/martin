@@ -4,3 +4,11 @@
 .viminfo
 .vscode/
 .vscode-server/
+
+
+.venv/
+venv/
+
+
+*.code-workspace
+
