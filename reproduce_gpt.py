@@ -295,6 +295,15 @@ torch.manual_seed(3333)
 if torch.cuda.is_available():
     torch.cuda.manual_seed(3333)
 
+
+total_batch_size = 524288 # 2**19
+B = 16
+T = 1024
+assert total_batch_size % ( B * T ) == 0, "the total batch size shoudl be divisible by B * T"
+grad_accum_steps = total_batch_size // (B * T) # 32k / (16 * 1024) = 32
+print(f"total desired batch size : {total_batch_size}")
+print(f"->> calculated gradient accumulation steps: { grad_accum_steps}")
+
 # data_loader = DataLoaderLite(B=4, T=32) # batch size 4, sequence length 32
 data_loader = DataLoaderLite(B=16, T=1024) 
 
@@ -331,12 +340,14 @@ optimizer = model.configure_optimizers(weight_decay=0.1, learning_rate=3e-4, dev
 for step in range(50):
 
     t0 = time.time()
-    x, y = data_loader.next_batch()
-    x, y = x.to(device), y.to(device)
     optimizer.zero_grad()
-    with torch.autocast(device_type=device, dtype=torch.bfloat16):
-        logits, loss = model(x, y)
-    loss.backward()
+    for micro_step in range(grad_accum_steps):
+        x, y = data_loader.next_batch()
+        x, y = x.to(device), y.to(device)
+        with torch.autocast(device_type=device, dtype=torch.bfloat16):
+            logits, loss = model(x, y)
+        loss = loss / grad_accum_steps # scale the loss by the number of accumulation steps
+        loss.backward()
     norm = torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0) # gradient clipping
 
     lr = get_lr(step)
