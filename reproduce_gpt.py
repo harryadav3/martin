@@ -50,12 +50,16 @@ class CasualSelfAttention(nn.Module):
         k = k.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B,nh, T, hs)
         v = v.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B,nh, T, hs)
 
-        att = ( q @ k.transpose(-2, -1)) * ( 1.0 / math.sqrt(k.size(-1)))
-        att = att.masked_fill(self.bias[:,:,:T,:T] == 0, float('-inf'))
-        att = F.softmax(att,dim=-1)
+        # att = ( q @ k.transpose(-2, -1)) * ( 1.0 / math.sqrt(k.size(-1)))
+        # att = att.masked_fill(self.bias[:,:,:T,:T] == 0, float('-inf'))
+        # att = F.softmax(att,dim=-1)
+        # y = att @ v # (B, nh, T, T) x (B, nh, T, hs) -> (B, nh, T, hs)
 
-        y = att @ v # (B, nh, T, T) x (B, nh, T, hs) -> (B, nh, T, hs)
+        #Using the Flash Attention
+        y = F.scaled_dot_product_attention(q,k,v, is_causal=True)
+
         y = y.transpose(1,2).contiguous().view(B,T,C) # reassemble all head outputs side by side
+        #output projection 
         y = self.c_proj(y) # output projection 
 
         return y
@@ -273,7 +277,7 @@ torch.set_float32_matmul_precision('high')
 #get logits 
 model = GPT(GPTConfig())
 model.to(device)
-
+model = torch.compile(model)
 #optimizer 
 optimizer = torch.optim.AdamW(model.parameters(), lr=3e-4)
 
@@ -293,7 +297,7 @@ for i in range(50):
     t1 = time.time()
     dt = ( t1 - t0 ) * 1000
     tokens_per_sec = (data_loader.B * data_loader.T) / (t1 - t0)
-    print(f"step {i}, loss: {loss.item()}, time: {dt:.2f}ms, tokens/sec: {tokens_per_sec:.2f}")
+    print(f"step {i} | loss: {loss.item()} | time: {dt:.2f}ms | tokens/sec: {tokens_per_sec:.2f}")
 
 
 import sys; sys.exit(0)
