@@ -107,24 +107,31 @@ class GPT(nn.Module):
 
         self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
 
-    def forward(self, idx):
+    def forward(self, idx, targets=None):
 
-        B, T = idx.size()
+        B, T = idx.size() # 4,32
 
         assert T <= self.config.block_size, f"Cannot forward sequence of length {T}, block size is only {self.config.block_size}"
 
         pos = torch.arange(0,T, dtype=torch.long, device=idx.device)
-        pos_emb = self.transformer.wpe(pos) # positional embd of shape (T, n_embd)   
-        tok_emb = self.transformer.wte(idx) # token embd of shape ( B, T, n_embd)   
+        pos_emb = self.transformer.wpe(pos) # positional embd of shape (T, n_embd( C = 768)) = (32, 768)
+        tok_emb = self.transformer.wte(idx) # token embd of shape ( B, T, n_embd) = (4,32,768)
 
-        x = tok_emb + pos_emb # (B, T, n_embd)
+        # here automatic conversion happens 
+        x = tok_emb + pos_emb # (B, T, n_embd) # (4, 32, 768) input token indices + positional embedding
 
         for block in self.transformer.h:
             x = block(x)
         
-        x = self.transformer.ln_f(x)
-        logits = self.lm_head(x)
-        return logits
+        x = self.transformer.ln_f(x) # each x is ( B, T, C) = ( 4, 32, 768)
+        logits = self.lm_head(x) # (B, T, V) = (4, 32, 50257) logits for each token in the vocabulary
+
+        # logits.view(-1, logits.size(-1)) ( B*T, V) = (128, 50257)
+        # y.view(-1) ( B*T) = (128,)
+        loss = None
+        if targets is not None:
+            loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1))
+        return logits, loss
 
     @classmethod
     def from_pretrained(cls, model_type):
@@ -180,22 +187,112 @@ class GPT(nn.Module):
 
 
 
-num_return_seq = 5
-max_length = 30
+# ----------------------------------------------------------
+
+import tiktoken 
+
+class DataLoaderLite:
+
+    def __init__(self, B, T):
+        self.B = B
+        self.T = T
+
+        with open('input.txt', 'r') as f:
+            text = f.read()
+
+        enc = tiktoken.get_encoding("gpt2")
+        tokens = enc.encode(text)
+
+        self.tokens = torch.tensor(tokens)
+        print(f"Loaded {len(self.tokens)} tokens from input.txt")
+        print(f" 1 epoch = {len(self.tokens) // (B * T)} batches of size {B} and sequence length {T}")
 
 
-model = GPT.from_pretrained('gpt2')
-model.eval()
-model.to("cuda")
+        self.current_position = 0
+
+
+    def next_batch(self):
+
+        B,T = self.B, self.T
+        
+        buf = self.tokens[self.current_position:self.current_position + B * T + 1] # buffer of token indices
+
+        x = (buf[:-1]).view(B,T) # (B, T) = (4, 32) input token indices
+        y = (buf[1:]).view(B,T) 
+
+        self.current_position += B * T
+
+        if self.current_position + ( B * T + 1)  > len(self.tokens):
+            self.current_position = 0 # reset to the beginning of the file
+        
+        return x,y
+
+# ------------------------------------------------------------
+
+device = "cpu"
+if torch.cuda.is_available():
+    device = "cuda"
+elif hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
+    device = "mps"
+
+print(f"Using device: {device}")
+
+
 
 
 #prefix 
 import tiktoken
 
 enc = tiktoken.get_encoding("gpt2")
-tokens = enc.encode("Hello, I'm a language model, ")
-tokens = torch.tensor(tokens, dtype=torch.long)
-tokens = tokens.unsqueeze(0).repeat(num_return_seq,1) # (5,8)
+with open('input.txt') as f:
+    text = f.read()
+
+text = text[:1000]
+tokens = enc.encode(text)
+
+B,T = 4,32
+buf = torch.tensor(tokens[:B*T + 1]) # buffer of token indices 4*32=128 + 1 
+buf = buf.to(device) # move to the device
+x = buf[:-1].view(B,T) # (B, T) = (4, 32) input token indices
+y = buf[1:].view(B,T) # (B, T) = (4, 32) target token indices
+
+
+
+#get logits 
+model = GPT(GPTConfig())
+model.to(device)
+
+#optimizer 
+optimizer = torch.optim.AdamW(model.parameters(), lr=3e-4)
+
+for i in range(50):
+    optimizer.zero_grad()
+    logits, loss = model(x, y)
+    loss.backward()
+    optimizer.step()
+    print(f"step {i}, loss: {loss.item()}")
+
+
+import sys; sys.exit(0)
+
+
+
+
+#-------------------------------------------
+
+num_return_seq = 5
+max_length = 30
+
+
+# model = GPT.from_pretrained('gpt2')
+model = GPT(GPTConfig())
+model.eval()
+model.to(device)
+
+
+# tokens = enc.encode("Hello, I'm a language model, ")
+# tokens = torch.tensor(tokens, dtype=torch.long)
+# tokens = tokens.unsqueeze(0).repeat(num_return_seq,1) # (5,8)
 
 x = tokens.to('cuda')
 
