@@ -248,7 +248,7 @@ class DataLoaderLite:
         self.B = B
         self.T = T
 
-        with open('input.txt', 'r') as f:
+        with open('data/text-data/input.txt', 'r') as f:
             text = f.read()
 
         enc = tiktoken.get_encoding("gpt2")
